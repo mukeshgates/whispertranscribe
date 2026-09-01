@@ -17,7 +17,7 @@ in the browser tab. Audio never leaves your device — there's no backend at all
    (`index.html`, `README.md`, `.nojekyll`) to it.
 2. On GitHub: **Settings → Pages → Source → Deploy from a branch → `main` / `(root)`** → Save.
 3. Wait a minute, then open the URL GitHub gives you (looks like
-   `https://<username>.github.io/<repo>/`).
+   `[https://<username>.github.io/<repo>](https://github.io/mukeshgates/whispertranscribe)/`).
 4. Drop in an audio file, pick a model quality, click Transcribe.
 
 That's it — no build step, no dependencies to install, no server to run.
