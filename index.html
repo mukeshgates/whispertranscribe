@@ -1,0 +1,267 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Word-Timestamp Transcriber</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --border: #2a2e38; --text: #e8e9ec;
+    --muted: #9aa0ab; --accent: #6c8cff; --accent-hover: #8aa3ff; --ok: #4ade80;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; padding: 40px 20px 80px; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    display: flex; justify-content: center;
+  }
+  .wrap { width: 100%; max-width: 760px; }
+  h1 { font-size: 1.5rem; margin: 0 0 6px; }
+  p.sub { color: var(--muted); margin: 0 0 28px; line-height: 1.5; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 12px;
+    padding: 24px; margin-bottom: 20px;
+  }
+  .drop {
+    border: 2px dashed var(--border); border-radius: 10px; padding: 36px 20px;
+    text-align: center; cursor: pointer; transition: border-color .15s;
+  }
+  .drop:hover, .drop.drag { border-color: var(--accent); }
+  .drop input { display: none; }
+  .drop .fname { color: var(--ok); font-weight: 600; margin-top: 8px; }
+  label { display: block; font-size: .85rem; color: var(--muted); margin-bottom: 6px; }
+  select, button {
+    font-family: inherit; font-size: .95rem; border-radius: 8px; border: 1px solid var(--border);
+  }
+  select {
+    width: 100%; padding: 10px 12px; background: #0d0f14; color: var(--text); margin-bottom: 16px;
+  }
+  button {
+    width: 100%; padding: 13px; background: var(--accent); color: #fff; border: none;
+    font-weight: 600; cursor: pointer; transition: background .15s;
+  }
+  button:hover:not(:disabled) { background: var(--accent-hover); }
+  button:disabled { background: #2a2e38; color: var(--muted); cursor: not-allowed; }
+  .status { margin-top: 14px; font-size: .9rem; color: var(--muted); min-height: 1.2em; }
+  .bar { height: 6px; border-radius: 3px; background: #0d0f14; overflow: hidden; margin-top: 8px; display: none; }
+  .bar.show { display: block; }
+  .bar > div { height: 100%; width: 0%; background: var(--accent); transition: width .2s; }
+  .results { display: none; }
+  .results.show { display: block; }
+  textarea {
+    width: 100%; min-height: 120px; background: #0d0f14; color: var(--text);
+    border: 1px solid var(--border); border-radius: 8px; padding: 12px; font-size: .9rem;
+    line-height: 1.5; resize: vertical;
+  }
+  .dl-row { display: flex; gap: 10px; margin-top: 14px; flex-wrap: wrap; }
+  .dl-row button { width: auto; flex: 1; min-width: 120px; background: #232735; }
+  .dl-row button:hover { background: #2c3142; }
+  .words {
+    margin-top: 16px; max-height: 260px; overflow-y: auto; font-size: .85rem;
+    border: 1px solid var(--border); border-radius: 8px;
+  }
+  .words table { width: 100%; border-collapse: collapse; }
+  .words th, .words td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--border); }
+  .words th { color: var(--muted); position: sticky; top: 0; background: var(--panel); }
+  .note { font-size: .8rem; color: var(--muted); margin-top: 20px; line-height: 1.6; }
+  .note code { background: #0d0f14; padding: 1px 5px; border-radius: 4px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Word-Timestamp Transcriber</h1>
+  <p class="sub">Drop in narration audio, get back a transcript with word-level timestamps —
+  for syncing captions or effects to speech. Runs entirely in this browser tab; your audio is
+  never uploaded anywhere.</p>
+
+  <div class="panel">
+    <label>Audio file</label>
+    <div class="drop" id="drop">
+      <div>🎙️ Drop audio here, or click to choose a file</div>
+      <div class="fname" id="fname"></div>
+      <input type="file" id="file" accept="audio/*">
+    </div>
+
+    <label style="margin-top:20px">Model quality</label>
+    <select id="model">
+      <option value="Xenova/whisper-tiny">Fast (tiny — quickest, less accurate)</option>
+      <option value="Xenova/whisper-base" selected>Balanced (base — recommended)</option>
+      <option value="Xenova/whisper-small">Accurate (small — slower, best quality)</option>
+    </select>
+
+    <button id="go" disabled>Transcribe</button>
+    <div class="status" id="status"></div>
+    <div class="bar" id="bar"><div id="barfill"></div></div>
+  </div>
+
+  <div class="panel results" id="results">
+    <label>Transcript</label>
+    <textarea id="transcript" readonly></textarea>
+    <div class="dl-row">
+      <button id="dlTxt">Download .txt</button>
+      <button id="dlSrt">Download .srt (subtitles)</button>
+      <button id="dlJson">Download .json (word timestamps)</button>
+    </div>
+    <div class="words" id="wordsBox"></div>
+  </div>
+
+  <p class="note">
+    First transcription downloads the model to this browser (60–250MB depending on quality) and
+    caches it, so later runs on this device are instant to load. Everything — model download and
+    transcription — happens locally in your browser tab via WebAssembly/WebGPU; nothing is sent
+    to a server. Best in Chrome or Edge. Very long files (60+ min) may be slow on CPU-only
+    machines — WebGPU (recent Chrome/Edge) is much faster if available.
+  </p>
+</div>
+
+<script type="module">
+import { pipeline, env } from "https://cdn.jsdelivr.net/npm/@huggingface/transformers@3.0.2";
+
+env.allowLocalModels = false;
+
+const dropEl = document.getElementById("drop");
+const fileEl = document.getElementById("file");
+const fnameEl = document.getElementById("fname");
+const goEl = document.getElementById("go");
+const statusEl = document.getElementById("status");
+const barEl = document.getElementById("bar");
+const barFillEl = document.getElementById("barfill");
+const resultsEl = document.getElementById("results");
+const transcriptEl = document.getElementById("transcript");
+const wordsBoxEl = document.getElementById("wordsBox");
+const modelEl = document.getElementById("model");
+
+let selectedFile = null;
+let lastResult = null;
+
+dropEl.addEventListener("click", () => fileEl.click());
+dropEl.addEventListener("dragover", (e) => { e.preventDefault(); dropEl.classList.add("drag"); });
+dropEl.addEventListener("dragleave", () => dropEl.classList.remove("drag"));
+dropEl.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropEl.classList.remove("drag");
+  if (e.dataTransfer.files.length) setFile(e.dataTransfer.files[0]);
+});
+fileEl.addEventListener("change", () => { if (fileEl.files.length) setFile(fileEl.files[0]); });
+
+function setFile(f) {
+  selectedFile = f;
+  fnameEl.textContent = f.name;
+  goEl.disabled = false;
+}
+
+async function decodeAudioFile(file) {
+  const arrayBuffer = await file.arrayBuffer();
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+  const targetRate = 16000;
+  const offline = new OfflineAudioContext(1, Math.ceil(audioBuffer.duration * targetRate), targetRate);
+  const src = offline.createBufferSource();
+  src.buffer = audioBuffer;
+  src.connect(offline.destination);
+  src.start(0);
+  const rendered = await offline.startRendering();
+  return rendered.getChannelData(0);
+}
+
+function fmtSrtTime(sec) {
+  const ms = Math.round((sec % 1) * 1000);
+  const total = Math.floor(sec);
+  const h = String(Math.floor(total / 3600)).padStart(2, "0");
+  const m = String(Math.floor((total % 3600) / 60)).padStart(2, "0");
+  const s = String(total % 60).padStart(2, "0");
+  return `${h}:${m}:${s},${String(ms).padStart(3, "0")}`;
+}
+
+function buildSrt(chunks) {
+  const lines = [];
+  let group = [];
+  let idx = 1;
+  const flush = () => {
+    if (!group.length) return;
+    const start = group[0].timestamp[0];
+    const end = group[group.length - 1].timestamp[1] ?? group[group.length - 1].timestamp[0];
+    const text = group.map(w => w.text.trim()).join(" ").replace(/\s+([.,!?])/g, "$1");
+    lines.push(`${idx++}\n${fmtSrtTime(start)} --> ${fmtSrtTime(end)}\n${text}\n`);
+    group = [];
+  };
+  for (const w of chunks) {
+    group.push(w);
+    const endsSentence = /[.!?]$/.test(w.text.trim());
+    if (group.length >= 12 || endsSentence) flush();
+  }
+  flush();
+  return lines.join("\n");
+}
+
+function download(filename, content, mime) {
+  const blob = new Blob([content], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+document.getElementById("dlTxt").addEventListener("click", () => {
+  if (lastResult) download("transcript.txt", lastResult.text.trim(), "text/plain");
+});
+document.getElementById("dlSrt").addEventListener("click", () => {
+  if (lastResult) download("captions.srt", buildSrt(lastResult.chunks), "text/plain");
+});
+document.getElementById("dlJson").addEventListener("click", () => {
+  if (lastResult) download("word_timestamps.json", JSON.stringify(lastResult.chunks, null, 2), "application/json");
+});
+
+goEl.addEventListener("click", async () => {
+  if (!selectedFile) return;
+  goEl.disabled = true;
+  resultsEl.classList.remove("show");
+  barEl.classList.add("show");
+  barFillEl.style.width = "0%";
+  statusEl.textContent = "Loading model... (first time downloads it, then it's cached)";
+
+  try {
+    const transcriber = await pipeline("automatic-speech-recognition", modelEl.value, {
+      device: (navigator.gpu ? "webgpu" : "wasm"),
+      progress_callback: (p) => {
+        if (p.status === "progress" && p.total) {
+          const pct = Math.round((p.loaded / p.total) * 100);
+          barFillEl.style.width = pct + "%";
+          statusEl.textContent = `Downloading model: ${p.file || ""} ${pct}%`;
+        }
+      },
+    });
+
+    statusEl.textContent = "Decoding audio...";
+    const audioData = await decodeAudioFile(selectedFile);
+
+    statusEl.textContent = "Transcribing... (this can take a while on CPU)";
+    barFillEl.style.width = "100%";
+
+    const output = await transcriber(audioData, {
+      return_timestamps: "word",
+      chunk_length_s: 30,
+      stride_length_s: 5,
+    });
+
+    lastResult = output;
+    transcriptEl.value = output.text.trim();
+
+    wordsBoxEl.innerHTML = "<table><thead><tr><th>Word</th><th>Start (s)</th><th>End (s)</th></tr></thead><tbody>" +
+      output.chunks.map(w => `<tr><td>${w.text}</td><td>${w.timestamp[0]?.toFixed(2) ?? ""}</td><td>${(w.timestamp[1] ?? w.timestamp[0])?.toFixed(2) ?? ""}</td></tr>`).join("") +
+      "</tbody></table>";
+
+    resultsEl.classList.add("show");
+    statusEl.textContent = "Done.";
+  } catch (err) {
+    console.error(err);
+    statusEl.textContent = "Error: " + err.message;
+  } finally {
+    goEl.disabled = false;
+    barEl.classList.remove("show");
+  }
+});
+</script>
+</body>
+</html>
